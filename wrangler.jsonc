@@ -8,7 +8,7 @@
     "enabled": true
   },
   "vars": {
-    "TEXT_UPSTREAM_PROFILE": "credential",
+    "TEXT_UPSTREAM_PROFILE": "cli-proxy",
     "MEDIA_BASE_URL": "https://api.x.ai/v1",
     "CLI_PROXY_BASE_URL": "https://cli-chat-proxy.grok.com/v1",
     "CLI_PROXY_CLIENT_VERSION": "0.2.93",
