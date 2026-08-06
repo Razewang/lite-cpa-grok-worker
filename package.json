@@ -1,0 +1,40 @@
+{
+  "name": "lite-cpa-grok-worker",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check:secrets": "node scripts/check-secrets.mjs",
+    "test:all": "npm run typecheck && npm test && npm run check:secrets",
+    "test:live": "node scripts/test-live.mjs",
+    "test:live:request": "tsx scripts/test-request-flow.ts"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "latest",
+    "typescript": "latest",
+    "tsx": "latest",
+    "vitest": "latest",
+    "wrangler": "latest"
+  },
+  "cloudflare": {
+    "bindings": {
+      "CREDENTIALS_KV": {
+        "description": "Stores the encrypted CPA credential and refreshed OAuth tokens. Cloudflare creates and binds a private KV namespace automatically."
+      },
+      "CLIENT_API_KEY": {
+        "description": "Set a strong random key that clients must send as a Bearer token when calling /v1/* routes."
+      },
+      "ADMIN_API_KEY": {
+        "description": "Set a different strong random key for credential import and other /admin/* routes."
+      },
+      "CREDENTIAL_ENCRYPTION_KEY": {
+        "description": "Set a unique random value of at least 32 characters. It encrypts CPA credentials before they are stored in KV."
+      }
+    }
+  }
+}

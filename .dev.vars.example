@@ -1,0 +1,5 @@
+# Cloudflare's Deploy to Cloudflare form presents these entries as Worker
+# secrets. Replace every value with a unique strong random value.
+CLIENT_API_KEY=replace-with-a-strong-random-client-key
+ADMIN_API_KEY=replace-with-a-different-strong-random-admin-key
+CREDENTIAL_ENCRYPTION_KEY=replace-with-a-unique-random-value-at-least-32-characters

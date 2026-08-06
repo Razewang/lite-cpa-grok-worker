@@ -1,0 +1,44 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "lite-cpa-grok-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-06",
+  "workers_dev": true,
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "TEXT_UPSTREAM_PROFILE": "credential",
+    "MEDIA_BASE_URL": "https://api.x.ai/v1",
+    "CLI_PROXY_BASE_URL": "https://cli-chat-proxy.grok.com/v1",
+    "CLI_PROXY_CLIENT_VERSION": "0.2.93",
+    "XAI_OAUTH_ISSUER": "https://auth.x.ai",
+    "XAI_OAUTH_SCOPE": "openid profile email offline_access grok-cli:access api:access"
+  },
+  "secrets": {
+    "required": [
+      "CLIENT_API_KEY",
+      "ADMIN_API_KEY",
+      "CREDENTIAL_ENCRYPTION_KEY"
+    ]
+  },
+  "kv_namespaces": [
+    {
+      "binding": "CREDENTIALS_KV","id": "4202538abd114c7e82f931e458398ec0"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "CREDENTIAL_COORDINATOR",
+        "class_name": "CredentialCoordinator"
+      }
+    ]
+  },
+  "exports": {
+    "CredentialCoordinator": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    }
+  }
+}
