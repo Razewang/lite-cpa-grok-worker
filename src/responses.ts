@@ -31,6 +31,64 @@ export function normalizeModelName(value: string): string {
   return MODEL_ALIASES[model] || model;
 }
 
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function flattenChatStyleTool(tool: unknown): unknown {
+  if (!isObject(tool)) return tool;
+
+  if (tool.type === "function" && isObject(tool.function)) {
+    const name = nonEmptyString(tool.function.name);
+    if (!name) throw badRequest("invalid_tools", "Function tools require a name");
+    const flattened: JsonObject = {
+      type: "function",
+      name,
+      parameters: isObject(tool.function.parameters)
+        ? tool.function.parameters
+        : { type: "object", properties: {} },
+    };
+    if (typeof tool.function.description === "string") flattened.description = tool.function.description;
+    if (typeof tool.function.strict === "boolean") flattened.strict = tool.function.strict;
+    return flattened;
+  }
+
+  if (tool.type === "custom" && isObject(tool.custom)) {
+    const name = nonEmptyString(tool.custom.name);
+    if (!name) throw badRequest("invalid_tools", "Custom tools require a name");
+    const flattened: JsonObject = { type: "custom", name };
+    if (typeof tool.custom.description === "string") flattened.description = tool.custom.description;
+    if (isObject(tool.custom.format)) flattened.format = tool.custom.format;
+    return flattened;
+  }
+
+  return tool;
+}
+
+function flattenChatStyleToolChoice(value: unknown): unknown {
+  if (!isObject(value)) return value;
+  if (value.type === "function" && isObject(value.function)) {
+    const name = nonEmptyString(value.function.name);
+    if (!name) throw badRequest("invalid_tool_choice", "Function tool_choice requires a name");
+    return { type: "function", name };
+  }
+  if (value.type === "custom" && isObject(value.custom)) {
+    const name = nonEmptyString(value.custom.name);
+    if (!name) throw badRequest("invalid_tool_choice", "Custom tool_choice requires a name");
+    return { type: "custom", name };
+  }
+  return value;
+}
+
+function normalizeResponseTools(payload: JsonObject): void {
+  if (Array.isArray(payload.tools)) {
+    payload.tools = payload.tools.map(flattenChatStyleTool);
+  }
+  if (payload.tool_choice !== undefined) {
+    payload.tool_choice = flattenChatStyleToolChoice(payload.tool_choice);
+  }
+}
+
 export function normalizeResponsesPayload(raw: JsonObject): NormalizedResponsesPayload {
   const payload: JsonObject = { ...raw };
   const model = payload.model;
@@ -48,6 +106,7 @@ export function normalizeResponsesPayload(raw: JsonObject): NormalizedResponsesP
   }
   delete payload.prompt_cache_key;
   for (const field of UNSUPPORTED_RESPONSE_FIELDS) delete payload[field];
+  normalizeResponseTools(payload);
   payload.stream = true;
 
   return { payload, clientStream, conversationId };

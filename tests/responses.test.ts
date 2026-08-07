@@ -34,6 +34,108 @@ describe("Responses adapter", () => {
     });
   });
 
+  it("flattens Chat Completions tools sent to the Responses endpoint", () => {
+    const normalized = normalizeResponsesPayload({
+      model: "grok-4.5",
+      input: "List my Stitch projects",
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "mcp__stitch_mcp__list_projects",
+            description: "List Stitch projects",
+            parameters: {
+              type: "object",
+              properties: { filter: { type: "string" } },
+              additionalProperties: false,
+            },
+            strict: true,
+          },
+        },
+        { type: "web_search" },
+      ],
+      tool_choice: {
+        type: "function",
+        function: { name: "mcp__stitch_mcp__list_projects" },
+      },
+      stream: false,
+    });
+
+    expect(normalized.payload.tools).toEqual([
+      {
+        type: "function",
+        name: "mcp__stitch_mcp__list_projects",
+        description: "List Stitch projects",
+        parameters: {
+          type: "object",
+          properties: { filter: { type: "string" } },
+          additionalProperties: false,
+        },
+        strict: true,
+      },
+      { type: "web_search" },
+    ]);
+    expect(normalized.payload.tool_choice).toEqual({
+      type: "function",
+      name: "mcp__stitch_mcp__list_projects",
+    });
+  });
+
+  it("keeps native Responses tools and tool choices unchanged", () => {
+    const tools = [
+      {
+        type: "function",
+        name: "lookup",
+        parameters: { type: "object", properties: {} },
+      },
+      { type: "x_search" },
+    ];
+    const toolChoice = { type: "function", name: "lookup" };
+    const normalized = normalizeResponsesPayload({
+      model: "grok-4.5",
+      input: "Look it up",
+      tools,
+      tool_choice: toolChoice,
+    });
+
+    expect(normalized.payload.tools).toEqual(tools);
+    expect(normalized.payload.tool_choice).toEqual(toolChoice);
+  });
+
+  it("supplies default parameters for nested functions and flattens custom tools", () => {
+    const normalized = normalizeResponsesPayload({
+      model: "grok-4.5",
+      input: "Use a tool",
+      tools: [
+        { type: "function", function: { name: "no_arguments" } },
+        {
+          type: "custom",
+          custom: {
+            name: "shell",
+            description: "Run a command",
+            format: { type: "text" },
+          },
+        },
+      ],
+      tool_choice: { type: "custom", custom: { name: "shell" } },
+    });
+
+    expect(normalized.payload.tools).toEqual([
+      {
+        type: "function",
+        name: "no_arguments",
+        parameters: { type: "object", properties: {} },
+      },
+      {
+        type: "custom",
+        name: "shell",
+        description: "Run a command",
+        format: { type: "text" },
+      },
+    ]);
+    expect(normalized.payload.tool_choice).toEqual({ type: "custom", name: "shell" });
+  });
+
   it("aggregates response.completed from chunked SSE", async () => {
     const body = streamFromChunks([
       "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\"}\n\n",
