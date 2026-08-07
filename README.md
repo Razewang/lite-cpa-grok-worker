@@ -6,13 +6,14 @@
 
 推荐直接点击上面的按钮部署。Cloudflare 会在部署者自己的账号中创建仓库副本、Worker、KV namespace 和 Durable Object 绑定，不需要下载仓库、安装 Node.js、运行 Wrangler 或手动填写 KV ID。
 
-当前版本只支持账号所有者授权的 xAI/Grok 订阅凭据。它不实现账号密码自动登录、多账号共享、Chat Completions、视频或管理网页；请自行确认服务条款和订阅授权范围。
+当前版本只支持账号所有者授权的 xAI/Grok 订阅凭据。它不实现账号密码自动登录、多账号共享、视频或管理网页；请自行确认服务条款和订阅授权范围。
 
 ## 路由
 
 - `GET /health`
 - `GET /v1/models`
 - `POST /v1/responses`
+- `POST /v1/chat/completions`
 - `POST /v1/images/generations`
 - `POST /v1/images/edits`
 - `POST /admin/credentials/import`
@@ -25,6 +26,110 @@
 Responses 请求会清洗不兼容字段、移除 `grok/`、`xai/`、`x-ai/` 模型前缀、把 `prompt_cache_key` 映射为 `X-Grok-Conv-Id`，并强制上游使用 SSE。客户端要求流式时直接透传；非流式时聚合 `response.completed`。
 
 搜索使用 Responses body 中的 `tools: [{"type":"web_search"}]` 或 `tools: [{"type":"x_search"}]`，不增加独立搜索地址。图片使用标准 `/v1/images/*` 路径。
+
+## Chat Completions 与 MCP
+
+LiteCPA 提供 `/v1/chat/completions` 兼容层，供只会调用 OpenAI Chat Completions 的客户端使用。它参考 CLIProxyAPI 的 xAI 处理方式，将 Chat Completions 转换成 xAI Responses 请求，再把 Responses 文本和函数调用转换回 `choices[].message`、`tool_calls` 或流式 `delta.tool_calls`。
+
+支持的工具调用闭环包括：
+
+1. 客户端连接自己的 MCP Server，并把 MCP tools 作为 OpenAI `tools[].function` 发给 LiteCPA。
+2. LiteCPA 把函数定义转换成 Responses function tools。
+3. Grok 返回函数调用时，LiteCPA 转换为 Chat Completions `tool_calls`。
+4. 客户端执行 MCP tool，并用 `role: "tool"`、`tool_call_id` 发回结果。
+5. LiteCPA 将结果转换成 `function_call_output`，供 Grok 继续生成最终回答。
+
+因此 Worker 不需要、也不会直接连接客户端电脑上的 MCP Server。MCP 的连接、授权、工具执行和人工确认仍由 Cursor、Cline、Roo Code、Continue 等客户端负责；Worker 只负责模型 API 协议转换。这里实现的也不是一个可供 MCP Client 连接的 `/mcp` transport endpoint。
+
+兼容层目前支持：
+
+- `system`、`developer`、`user`、`assistant` 和 `tool` 消息。
+- OpenAI function tools、`tool_choice`、`parallel_tool_calls` 和多工具调用。
+- 文本、用户图片/文件输入的常用 Chat Completions content part。
+- `max_tokens` / `max_completion_tokens`、`temperature`、`top_p`、`reasoning_effort` 和 Structured Outputs 的常用映射。
+- 流式文本、流式函数参数、`stream_options.include_usage` 和非流式聚合。
+- MCP 客户端常见的长工具名缩短与响应名称恢复。
+
+当前限制：只支持 `n=1`，不转换音频、logprobs、旧版 `functions` / `function_call` 字段，也不在 Worker 内执行客户端函数。上游 xAI Responses 不支持的 Chat 参数（例如 `stop`）不会转发。
+
+相关协议参考：
+
+- [OpenAI Chat Completions API](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)
+- [xAI Function Calling](https://docs.x.ai/developers/tools/function-calling)
+- [xAI Remote MCP Tools](https://docs.x.ai/developers/tools/remote-mcp)
+- [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)
+
+### 在 OpenAI 兼容客户端中使用 MCP
+
+客户端的模型 Provider 使用以下配置：
+
+```text
+Base URL: https://<你的-worker-域名>/v1
+API Key: <CLIENT_API_KEY>
+Model: grok-4.5
+API format: OpenAI Chat Completions
+```
+
+Base URL 一般填写到 `/v1`，不要填写 `/v1/chat/completions`，除非客户端明确要求完整 endpoint。API Key 使用 `CLIENT_API_KEY`，不是 `ADMIN_API_KEY`、CPA access token 或 xAI token。MCP Server 仍按客户端自己的 MCP 配置方式添加。
+
+可先用不执行真实外部操作的函数请求检查第一段工具调用：
+
+```powershell
+$clientKey = Read-Host "CLIENT_API_KEY" -MaskInput
+$body = @{
+  model = "grok-4.5"
+  messages = @(
+    @{ role = "user"; content = "请调用 echo 工具并传入 hello" }
+  )
+  tools = @(
+    @{
+      type = "function"
+      function = @{
+        name = "echo"
+        description = "Return the supplied text"
+        parameters = @{
+          type = "object"
+          properties = @{ text = @{ type = "string" } }
+          required = @("text")
+        }
+      }
+    }
+  )
+  tool_choice = @{ type = "function"; function = @{ name = "echo" } }
+  stream = $false
+} | ConvertTo-Json -Depth 12
+
+Invoke-RestMethod `
+  -Uri "https://<你的-worker-域名>/v1/chat/completions" `
+  -Method Post `
+  -Headers @{ Authorization = "Bearer $clientKey" } `
+  -ContentType "application/json" `
+  -Body $body
+```
+
+成功时 `choices[0].message.tool_calls` 会包含 `echo`、`call_id` 和 JSON arguments。实际客户端会自动执行 MCP tool，并在下一轮请求中同时带回 assistant 的 `tool_calls` 与 `role: "tool"` 的执行结果。
+
+### xAI 原生 Remote MCP
+
+如果 MCP Server 是可由公网访问的 HTTPS Remote MCP，也可以绕过 Chat 兼容层，直接调用 `/v1/responses`：
+
+```json
+{
+  "model": "grok-4.5",
+  "input": "这个 MCP Server 可以做什么？",
+  "tools": [
+    {
+      "type": "mcp",
+      "server_url": "https://your-trusted-mcp.example.com/mcp",
+      "server_label": "trusted_server",
+      "allowed_tools": ["read_only_tool"]
+    }
+  ],
+  "stream": false
+}
+```
+
+此模式由 xAI 连接 Remote MCP，不是 Worker 连接。只填写你信任的 MCP Server，并优先使用 `allowed_tools` 限制可调用工具。电脑本机的 stdio MCP 或仅监听 localhost 的服务不能用这个模式，应使用上面的客户端管理模式。
 
 ## 本地运行
 
@@ -71,6 +176,13 @@ npm run test:live:request
 
 该脚本必须通过 `CPA_CREDENTIAL_PATH` 指向工作区外的 CPA 文件；示例路径仅为占位符。它只输出成功状态和耗时，不输出 access token 或完整模型响应，也不会回写 CPA 文件。
 
+如需额外验证 Chat Completions function-tool 转换，可显式启用一个不会执行外部操作的强制 `echo` 工具调用：
+
+```powershell
+$env:LIVE_CHAT_TOOL="1"
+npm run test:live:request
+```
+
 ## 上游配置
 
 默认 `TEXT_UPSTREAM_PROFILE=credential`，首次真实测试跟随 CPA JSON 中的 `https://api.x.ai/v1`。如需切换到 Grok CLI 兼容模式：
@@ -78,7 +190,7 @@ npm run test:live:request
 ```text
 TEXT_UPSTREAM_PROFILE=cli-proxy
 CLI_PROXY_BASE_URL=https://cli-chat-proxy.grok.com/v1
-CLI_PROXY_CLIENT_VERSION=0.2.93
+CLI_PROXY_CLIENT_VERSION=0.2.120
 ```
 
 CLI Proxy 模式只允许固定的 `cli-chat-proxy.grok.com` 主机，并添加 CLI 兼容请求头；用户不能通过请求体传入任意上游地址。媒体默认仍使用 CPA 的 `base_url`，也可以通过 `MEDIA_BASE_URL` 选择固定允许的 xAI/CLI Proxy 地址。
@@ -265,7 +377,7 @@ Cloudflare 页面可能显示 **Build variables and secrets**。它们只在构�
 | `TEXT_UPSTREAM_PROFILE` | `credential` | 使用 CPA 的 `base_url` |
 | `MEDIA_BASE_URL` | 空 | 图片默认跟随 CPA base URL |
 | `CLI_PROXY_BASE_URL` | `https://cli-chat-proxy.grok.com/v1` | CLI Proxy 固定地址 |
-| `CLI_PROXY_CLIENT_VERSION` | `0.2.93` | CLI 兼容请求头版本 |
+| `CLI_PROXY_CLIENT_VERSION` | `0.2.120` | CLI 兼容请求头版本；与当前 CLIProxyAPI 的 xAI executor 保持一致 |
 | `XAI_OAUTH_ISSUER` | `https://auth.x.ai` | xAI OAuth issuer |
 | `XAI_OAUTH_SCOPE` | `openid profile email offline_access grok-cli:access api:access` | OAuth scopes |
 
@@ -384,6 +496,25 @@ Invoke-RestMethod `
   -Body $body
 ```
 
+检查 Chat Completions 兼容端点：
+
+```powershell
+$chatBody = @{
+  model = "grok-4.5"
+  messages = @(@{ role = "user"; content = "Reply with OK." })
+  stream = $false
+} | ConvertTo-Json -Depth 6
+
+Invoke-RestMethod `
+  -Uri "$workerUrl/v1/chat/completions" `
+  -Method Post `
+  -Headers @{ Authorization = "Bearer $clientKey" } `
+  -ContentType "application/json" `
+  -Body $chatBody
+```
+
+Cloudflare 不需要为 Chat Completions 或 MCP 增加新的 binding、Secret 或环境变量；更新到包含该路由的 Worker 版本即可。
+
 也可以使用仓库中的安全测试脚本；它不会修改项目文件，也不会输出 CPA token：
 
 ```powershell
@@ -469,6 +600,7 @@ npx wrangler versions upload
 - [ ] `/health` 返回 200。
 - [ ] CPA 导入后 `/admin/auth/status` 显示 `configured: true`。
 - [ ] `/v1/models` 使用客户端 Key 可以访问。
+- [ ] `/v1/chat/completions` 可以返回 `choices[0].message`。
 - [ ] CPA JSON 和 token 没有出现在 GitHub、Build variables 或日志中。
 
 ### 常见部署错误

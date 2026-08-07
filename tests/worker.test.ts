@@ -114,6 +114,41 @@ describe("Worker routes", () => {
     expect(upstreamRequest?.headers.get("x-grok-conv-id")).toBe("conv-fixture");
   });
 
+  it("adapts Chat Completions requests and responses through the Responses upstream", async () => {
+    const { env } = createEnv();
+    let upstreamRequest: Request | undefined;
+    let sentBody: Record<string, unknown> | undefined;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      upstreamRequest = new Request(input, init);
+      sentBody = await upstreamRequest.json() as Record<string, unknown>;
+      return new Response(
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_chat\",\"model\":\"grok-4.5\",\"created_at\":123,\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"你好\"}]}]}}\n\n",
+        { headers: { "content-type": "text/event-stream" } },
+      );
+    }));
+    const response = await worker.fetch(new Request("https://worker.test/v1/chat/completions", {
+      method: "POST",
+      headers: { authorization: "Bearer client-key", "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "grok-4.5",
+        messages: [{ role: "user", content: "你好" }],
+        stream: false,
+      }),
+    }), env);
+
+    expect(response.status).toBe(200);
+    expect(upstreamRequest?.url).toBe("https://api.x.ai/v1/responses");
+    expect(sentBody).toMatchObject({
+      model: "grok-4.5",
+      stream: true,
+      input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "你好" }] }],
+    });
+    await expect(response.json()).resolves.toMatchObject({
+      object: "chat.completion",
+      choices: [{ message: { role: "assistant", content: "你好" }, finish_reason: "stop" }],
+    });
+  });
+
   it("routes image generation through the media path", async () => {
     const { env } = createEnv();
     let requestedUrl = "";
@@ -146,6 +181,9 @@ describe("Worker routes", () => {
     expect(response.status).toBe(200);
     expect(upstreamRequest?.url).toBe("https://cli-chat-proxy.grok.com/v1/models");
     expect(upstreamRequest?.headers.get("x-xai-token-auth")).toBe("xai-grok-cli");
-    expect(upstreamRequest?.headers.get("x-grok-client-version")).toBe("0.2.93");
+    expect(upstreamRequest?.headers.get("x-grok-client-version")).toBe("0.2.120");
+    expect(upstreamRequest?.headers.get("user-agent")).toBe("xai-grok-workspace/0.2.120");
+    expect(upstreamRequest?.headers.get("x-grok-client-identifier")).toBe("grok-shell");
+    expect(upstreamRequest?.headers.get("x-authenticateresponse")).toBe("authenticate-response");
   });
 });
