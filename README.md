@@ -23,7 +23,7 @@
 
 `/v1/*` 使用客户端网关 Key；普通 `/admin/*` 使用独立的管理 Key。OAuth 浏览器回调不携带 Header，因此 `/admin/auth/callback` 使用一次性 PKCE state 作为短期凭据；`/health` 不需要 Key。
 
-Responses 请求会清洗不兼容字段、移除 `grok/`、`xai/`、`x-ai/` 模型前缀、把 `prompt_cache_key` 映射为 `X-Grok-Conv-Id`，并强制上游使用 SSE。客户端要求流式时直接透传；非流式时聚合 `response.completed`。
+Responses 请求会清洗不兼容字段、移除 `grok/`、`xai/`、`x-ai/` 模型前缀、把 `prompt_cache_key` 映射为 `X-Grok-Conv-Id`，并强制上游使用 SSE。客户端要求流式时直接透传；非流式时聚合 `response.completed`。如果客户端虽然调用 `/v1/responses`，却把 MCP function tools 发送成 Chat Completions 的嵌套 `tools[].function` 格式，Worker 会自动展开为 xAI Responses 的扁平格式；对应的嵌套 `tool_choice` 也会同步转换。
 
 搜索使用 Responses body 中的 `tools: [{"type":"web_search"}]` 或 `tools: [{"type":"x_search"}]`，不增加独立搜索地址。图片使用标准 `/v1/images/*` 路径。
 
@@ -40,6 +40,36 @@ LiteCPA 提供 `/v1/chat/completions` 兼容层，供只会调用 OpenAI Chat Co
 5. LiteCPA 将结果转换成 `function_call_output`，供 Grok 继续生成最终回答。
 
 因此 Worker 不需要、也不会直接连接客户端电脑上的 MCP Server。MCP 的连接、授权、工具执行和人工确认仍由 Cursor、Cline、Roo Code、Continue 等客户端负责；Worker 只负责模型 API 协议转换。这里实现的也不是一个可供 MCP Client 连接的 `/mcp` transport endpoint。
+
+部分客户端默认使用 `/v1/responses`，但仍沿用 Chat Completions 的嵌套 function schema。LiteCPA 会兼容下面这种混合请求，无需强制客户端切换到 `/v1/chat/completions`：
+
+```json
+{
+  "model": "grok-4.5",
+  "input": "列出我的 Stitch 项目",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "mcp__stitch_mcp__list_projects",
+        "description": "List Stitch projects",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "filter": { "type": "string" }
+          }
+        }
+      }
+    }
+  ],
+  "tool_choice": {
+    "type": "function",
+    "function": { "name": "mcp__stitch_mcp__list_projects" }
+  }
+}
+```
+
+标准 Responses 扁平 function tools、`web_search`、`x_search` 和 xAI Remote MCP 工具不会被改写。使用 `/v1/responses` 时，响应仍然保持 Responses API 格式；只有工具定义和 `tool_choice` 会在转发前做兼容转换。
 
 兼容层目前支持：
 
