@@ -43,9 +43,19 @@ describe("Responses adapter", () => {
     await expect(collectCompletedResponse(body)).resolves.toEqual({ id: "resp_fixture", output: [] });
   });
 
+  it("keeps output_item.done entries when the completed event omits output", async () => {
+    const body = streamFromChunks([
+      "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"call_id\":\"call_fixture\",\"name\":\"lookup\",\"arguments\":\"{}\"}}\n\n",
+      "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_fixture\",\"status\":\"completed\",\"output\":[]}}\n\n",
+    ]);
+    await expect(collectCompletedResponse(body)).resolves.toMatchObject({
+      id: "resp_fixture",
+      output: [{ type: "function_call", call_id: "call_fixture", name: "lookup", arguments: "{}" }],
+    });
+  });
+
   it("rejects an incomplete upstream stream", async () => {
     const body = streamFromChunks(["data: {\"type\":\"response.output_text.delta\"}\n\n"]);
     await expect(collectCompletedResponse(body)).rejects.toThrow("did not complete");
   });
 });
-

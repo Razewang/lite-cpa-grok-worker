@@ -53,12 +53,12 @@ export function normalizeResponsesPayload(raw: JsonObject): NormalizedResponsesP
   return { payload, clientStream, conversationId };
 }
 
-interface ParsedSseEvent {
+export interface ParsedSseEvent {
   eventName?: string;
   data: string;
 }
 
-function parseSseBlock(block: string): ParsedSseEvent | null {
+export function parseSseBlock(block: string): ParsedSseEvent | null {
   const lines = block.split(/\r?\n/);
   let eventName: string | undefined;
   const dataLines: string[] = [];
@@ -74,7 +74,7 @@ function parseSseBlock(block: string): ParsedSseEvent | null {
   return { eventName, data: dataLines.join("\n") };
 }
 
-function completedValue(event: ParsedSseEvent): unknown | undefined {
+function parsedEventObject(event: ParsedSseEvent): Record<string, unknown> | undefined {
   if (event.data === "[DONE]") return undefined;
   let parsed: unknown;
   try {
@@ -83,14 +83,46 @@ function completedValue(event: ParsedSseEvent): unknown | undefined {
     throw new UpstreamError(502, "The upstream response stream contained invalid data");
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
-  const object = parsed as Record<string, unknown>;
+  return parsed as Record<string, unknown>;
+}
+
+function completedValue(event: ParsedSseEvent, object: Record<string, unknown>): unknown | undefined {
   if (object.type === "error" || event.eventName === "error") {
     throw new UpstreamError(502, "The upstream response stream returned an error");
   }
-  if (object.type === "response.completed" || event.eventName === "response.completed") {
+  if (object.type === "response.completed" || object.type === "response.incomplete"
+    || event.eventName === "response.completed" || event.eventName === "response.incomplete") {
     return object.response ?? object;
   }
   return undefined;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function patchCompletedOutput(
+  completed: unknown,
+  indexedItems: Map<number, unknown>,
+  fallbackItems: unknown[],
+): unknown {
+  if (!isObject(completed) || (!indexedItems.size && !fallbackItems.length)) return completed;
+  const output = Array.isArray(completed.output) ? [...completed.output] : [];
+  for (const [index, item] of indexedItems) output[index] = item;
+  const knownIds = new Set(output.flatMap((item) => {
+    if (!isObject(item)) return [];
+    const id = typeof item.id === "string" ? item.id : typeof item.call_id === "string" ? item.call_id : undefined;
+    return id ? [id] : [];
+  }));
+  for (const item of fallbackItems) {
+    const id = isObject(item)
+      ? typeof item.id === "string" ? item.id : typeof item.call_id === "string" ? item.call_id : undefined
+      : undefined;
+    if (id && knownIds.has(id)) continue;
+    output.push(item);
+    if (id) knownIds.add(id);
+  }
+  return { ...completed, output: output.filter((item) => item !== undefined) };
 }
 
 export async function collectCompletedResponse(
@@ -102,13 +134,21 @@ export async function collectCompletedResponse(
   let buffer = "";
   let completed: unknown;
   let foundCompleted = false;
+  const indexedItems = new Map<number, unknown>();
+  const fallbackItems: unknown[] = [];
 
   const consumeBlock = (block: string): void => {
     const event = parseSseBlock(block);
     if (!event) return;
-    const value = completedValue(event);
+    const object = parsedEventObject(event);
+    if (!object) return;
+    if (object.type === "response.output_item.done" && object.item !== undefined) {
+      if (typeof object.output_index === "number") indexedItems.set(object.output_index, object.item);
+      else fallbackItems.push(object.item);
+    }
+    const value = completedValue(event, object);
     if (value !== undefined) {
-      completed = value;
+      completed = patchCompletedOutput(value, indexedItems, fallbackItems);
       foundCompleted = true;
     }
   };
@@ -142,7 +182,7 @@ export async function collectCompletedResponse(
   throw new UpstreamError(502, "The upstream response did not complete");
 }
 
-function streamingHeaders(id: string): Headers {
+export function streamingHeaders(id: string): Headers {
   const headers = new Headers();
   headers.set("content-type", "text/event-stream; charset=utf-8");
   headers.set("cache-control", "no-cache, no-store");

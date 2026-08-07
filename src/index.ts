@@ -1,5 +1,6 @@
 import { handleAuthCallback, handleAuthStart, handleAuthStatus, handleCredentialImport } from "./auth";
 import { CredentialCoordinator } from "./coordinator";
+import { handleChatCompletions } from "./chat-completions";
 import { methodNotAllowed, notFound, unauthorized } from "./errors";
 import { errorResponse, isAuthorized, jsonResponse, requestId } from "./http";
 import { handleImages } from "./images";
@@ -7,7 +8,7 @@ import { handleModels } from "./models";
 import { handleResponses } from "./responses";
 import type { Env } from "./types";
 
-const SERVICE_VERSION = "0.1.0";
+const SERVICE_VERSION = "0.2.0";
 
 function healthResponse(env: Env, id: string): Response {
   return jsonResponse(
@@ -64,6 +65,10 @@ async function route(request: Request, env: Env, id: string): Promise<Response> 
     if (url.pathname === "/v1/responses") {
       assertMethod(request, "POST");
       return handleResponses(request, env, id);
+    }
+    if (url.pathname === "/v1/chat/completions") {
+      assertMethod(request, "POST");
+      return handleChatCompletions(request, env, id);
     }
     if (url.pathname === "/v1/images/generations") {
       assertMethod(request, "POST");

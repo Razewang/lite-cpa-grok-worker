@@ -39,9 +39,12 @@ export function buildUpstreamHeaders(
   if (options.conversationId) headers.set("x-grok-conv-id", options.conversationId);
 
   if (options.kind === "text" && env.TEXT_UPSTREAM_PROFILE === "cli-proxy") {
+    const clientVersion = env.CLI_PROXY_CLIENT_VERSION || "0.2.120";
     headers.set("x-xai-token-auth", "xai-grok-cli");
-    headers.set("x-grok-client-version", env.CLI_PROXY_CLIENT_VERSION || "0.2.93");
-    headers.set("user-agent", "xai-grok-worker/0.1.0");
+    headers.set("x-grok-client-version", clientVersion);
+    headers.set("user-agent", `xai-grok-workspace/${clientVersion}`);
+    headers.set("x-grok-client-identifier", "grok-shell");
+    headers.set("x-authenticateresponse", "authenticate-response");
   }
   return headers;
 }

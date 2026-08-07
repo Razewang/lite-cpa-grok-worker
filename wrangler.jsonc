@@ -11,7 +11,7 @@
     "TEXT_UPSTREAM_PROFILE": "cli-proxy",
     "MEDIA_BASE_URL": "https://api.x.ai/v1",
     "CLI_PROXY_BASE_URL": "https://cli-chat-proxy.grok.com/v1",
-    "CLI_PROXY_CLIENT_VERSION": "0.2.93",
+    "CLI_PROXY_CLIENT_VERSION": "0.2.120",
     "XAI_OAUTH_ISSUER": "https://auth.x.ai",
     "XAI_OAUTH_SCOPE": "openid profile email offline_access grok-cli:access api:access"
   },

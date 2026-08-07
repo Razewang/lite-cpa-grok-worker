@@ -4,6 +4,7 @@ import {
   parseCpaCredential,
   refreshCredential,
 } from "../src/credentials";
+import { chatCompletionFromResponse, translateChatCompletionsPayload } from "../src/chat-completions";
 import { collectCompletedResponse, normalizeResponsesPayload } from "../src/responses";
 import { fetchUpstream } from "../src/upstream";
 import type { Env, JsonObject } from "../src/types";
@@ -64,6 +65,60 @@ async function run(): Promise<void> {
   });
   await collectCompletedResponse(upstream.body);
 
+  let chatToolCallCompleted = false;
+  if (enabled(process.env.LIVE_CHAT_TOOL)) {
+    const translated = translateChatCompletionsPayload({
+      model,
+      messages: [{ role: "user", content: "Call the echo tool with the text hello." }],
+      tools: [{
+        type: "function",
+        function: {
+          name: "echo",
+          description: "Return the supplied text",
+          parameters: {
+            type: "object",
+            properties: { text: { type: "string" } },
+            required: ["text"],
+          },
+        },
+      }],
+      tool_choice: { type: "function", function: { name: "echo" } },
+      stream: false,
+    });
+    const toolPayload = normalizeResponsesPayload(translated.payload);
+    const toolUpstream = await fetchUpstream(env, credential, "/responses", {
+      method: "POST",
+      body: JSON.stringify(toolPayload.payload),
+      accept: "text/event-stream",
+      contentType: "application/json",
+      kind: "text",
+    });
+    const completed = await collectCompletedResponse(toolUpstream.body);
+    const chat = chatCompletionFromResponse(completed, {
+      requestedModel: model,
+      requestId: "live-tool-check",
+      includeUsage: false,
+      toolNames: translated.toolNames,
+    });
+    const choices = Array.isArray(chat.choices) ? chat.choices : [];
+    const firstChoice = choices[0];
+    const message = firstChoice && typeof firstChoice === "object" && !Array.isArray(firstChoice)
+      ? (firstChoice as Record<string, unknown>).message
+      : undefined;
+    const calls = message && typeof message === "object" && !Array.isArray(message)
+      ? (message as Record<string, unknown>).tool_calls
+      : undefined;
+    const firstCall = Array.isArray(calls) ? calls[0] : undefined;
+    const functionValue = firstCall && typeof firstCall === "object" && !Array.isArray(firstCall)
+      ? (firstCall as Record<string, unknown>).function
+      : undefined;
+    chatToolCallCompleted = Boolean(
+      functionValue && typeof functionValue === "object" && !Array.isArray(functionValue)
+      && (functionValue as Record<string, unknown>).name === "echo",
+    );
+    if (!chatToolCallCompleted) throw new Error("Live Chat tool request did not return the forced echo call");
+  }
+
   console.log(JSON.stringify({
     ok: true,
     cpa_imported: true,
@@ -72,6 +127,7 @@ async function run(): Promise<void> {
     upstream_base_url: credential.baseUrl,
     upstream_status: upstream.status,
     response_completed: true,
+    chat_tool_call_completed: chatToolCallCompleted,
     elapsed_ms: Date.now() - startedAt,
   }));
 }
